@@ -10,9 +10,27 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  char *p = argv[1];
+
   std::cout << "  .global main" << std::endl;
   std::cout << "main:" << std::endl;
-  std::cout << std::format("  mov ${}, %rax\n", std::atoi(argv[1]));
+  std::cout << std::format("  mov ${}, %rax\n", strtol(p, &p, 10));
+
+  while (*p) {
+      if (*p == '+') {
+          p++;
+          std::cout << std::format("  add ${}, %rax\n", strtol(p, &p, 10));
+          continue;
+      }
+      if (*p == '-') {
+          p++;
+          std::cout << std::format("  sub ${}, %rax\n", strtol(p, &p, 10));
+          continue;
+      }
+
+      std::cerr << "unexpected character: '" << *p << "'\n";
+      return 1;
+  }
   std::cout << "  ret" << std::endl;
 
   return 0;
