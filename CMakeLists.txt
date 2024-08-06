@@ -1,7 +1,9 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.25)
 project(learncompiler)
 
 set(CMAKE_CXX_STANDARD 20)
 
-add_executable(learncompiler
-        src/main.cc)
+add_subdirectory(contrib)
+
+add_executable(chibicc "${PROJECT_SOURCE_DIR}/src/main.cc")
+target_link_libraries(chibicc fmtlib)
