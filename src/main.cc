@@ -19,6 +19,7 @@ typedef enum {
 
 // Token Type
 typedef struct Token Token;
+
 struct Token {
     TokenKind kind;     // Token kind
     Token *next;        // Next Token
@@ -26,7 +27,7 @@ struct Token {
     char *loc;          // Token location
     int len;            // Token length
 
-    Token(TokenKind p_kind, char *start, int p_len): kind(p_kind), loc(start), len(p_len) {}
+    Token(TokenKind p_kind, char *start, int p_len) : kind(p_kind), loc(start), len(p_len) {}
 
     Token() {}
 };
@@ -89,6 +90,20 @@ static int get_number(Token *tok) {
     return tok->val;
 }
 
+static bool startswitch(const char *p, const char *q) {
+    return strncmp(p, q, strlen(q)) == 0;
+}
+
+// Read a punctuator token from p and returns its length.
+static int read_punct(const char *p) {
+    if (startswitch(p, "==") || startswitch(p, "!=") ||
+        startswitch(p, "<=") || startswitch(p, ">=")) {
+        return 2;
+    }
+
+    return ispunct(*p) ? 1 : 0;
+}
+
 // Tokenize `current_input` and returns new tokens.
 static Token *tokenize(void) {
     char *p = current_input;
@@ -112,9 +127,10 @@ static Token *tokenize(void) {
         }
 
         // Punctuators
-        if (ispunct(*p)) {
-            cur = cur->next = new Token(TK_PUNCT, p, 1);
-            p++;
+        int punct_len = read_punct(p);
+        if (punct_len) {
+            cur = cur->next = new Token(TK_PUNCT, p, punct_len);
+            p += cur->len;
             continue;
         }
 
@@ -135,29 +151,94 @@ typedef enum {
     ND_MUL, // *
     ND_DIV, // /
     ND_NEG, // unary -
+    ND_EQ,  // ==
+    ND_NE,  // !=
+    ND_LT,  // <
+    ND_LE,  // <=
     ND_NUM, // Integer
 } NodeKind;
 
 // AST node type
 typedef struct Node Node;
+
 struct Node {
     NodeKind kind;  // Node kind
     Node *lhs;      // Left-hand side
     Node *rhs;      // Right-hand side
     int val;        // Used if kind == ND_NUM
 
-    Node(NodeKind p_kind, int p_val): kind(p_kind), lhs(nullptr), rhs(nullptr), val(p_val) {}
+    Node(NodeKind p_kind, int p_val) : kind(p_kind), lhs(nullptr), rhs(nullptr), val(p_val) {}
 
-    Node(NodeKind p_kind, Node *p_lhs, Node *p_rhs): kind(p_kind), lhs(p_lhs), rhs(p_rhs), val(0) {}
+    Node(NodeKind p_kind, Node *p_lhs, Node *p_rhs) : kind(p_kind), lhs(p_lhs), rhs(p_rhs), val(0) {}
 };
 
 static Node *expr(Token **rest, Token *tok);
+
+static Node *equality(Token **rest, Token *tok);
+
+static Node *relational(Token **rest, Token *tok);
+
+static Node *add(Token **rest, Token *tok);
+
 static Node *mul(Token **rest, Token *tok);
+
 static Node *unary(Token **rest, Token *tok);
+
 static Node *primary(Token **rest, Token *tok);
 
-// expr = mul ("+" mul | "-" mul)
+// expr = equality
 static Node *expr(Token **rest, Token *tok) {
+    return equality(rest, tok);
+}
+
+// equality = relational ("==" relational | "!=" relational)*
+static Node *equality(Token **rest, Token *tok) {
+    Node *node = relational(&tok, tok);
+
+    for (;;) {
+        if (equal(tok, "==")) {
+            node = new Node(ND_EQ, node, relational(&tok, tok->next));
+            continue;
+        }
+        if (equal(tok, "!=")) {
+            node = new Node(ND_NE, node, relational(&tok, tok->next));
+            continue;
+        }
+
+        *rest = tok;
+        return node;
+    }
+}
+
+// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+static Node *relational(Token **rest, Token *tok) {
+    Node *node = add(&tok, tok);
+
+    for (;;) {
+        if (equal(tok, "<")) {
+            node = new Node(ND_LT, node, add(&tok, tok->next));
+            continue;
+        }
+        if (equal(tok, "<=")) {
+            node = new Node(ND_LE, node, add(&tok, tok->next));
+            continue;
+        }
+        if (equal(tok, ">")) {
+            node = new Node(ND_LT, add(&tok, tok->next), node);
+            continue;
+        }
+        if (equal(tok, ">=")) {
+            node = new Node(ND_LE, add(&tok, tok->next), node);
+            continue;
+        }
+
+        *rest = tok;
+        return node;
+    }
+}
+
+// add = mul ("+" mul | "-" mul)*
+static Node *add(Token **rest, Token *tok) {
     Node *node = mul(&tok, tok);
 
     for (;;) {
@@ -233,8 +314,8 @@ static Node *primary(Token **rest, Token *tok) {
 static int depth;
 
 static void push(void) {
-   fmt::print("  push %rax\n");
-   depth++;
+    fmt::print("  push %rax\n");
+    depth++;
 }
 
 static void pop(const char *arg) {
@@ -272,33 +353,50 @@ static void gen_expr(Node *node) {
             fmt::print("  cqo\n");
             fmt::print("  idiv %rdi\n");
             return;
+        case ND_EQ:
+        case ND_NE:
+        case ND_LT:
+        case ND_LE:
+            fmt::print("  cmp %rdi, %rax\n");
+
+            if (node->kind == ND_EQ) {
+                fmt::print("  sete %al\n");
+            } else if (node->kind == ND_NE) {
+                fmt::print("  setne %al\n");
+            } else if (node->kind == ND_LT) {
+                fmt::print("  setl %al\n");
+            } else if (node->kind == ND_LE) {
+                fmt::print("  setle %al\n");
+            }
+            fmt::print("  movzb %al, %rax\n");
+            return;
     }
 
     error("invalid expression");
 }
 
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    error("%s : invalid number of arguments", argv[0]);
-  }
+    if (argc != 2) {
+        error("%s : invalid number of arguments", argv[0]);
+    }
 
-  // Tokenize and parse.
-  current_input = argv[1];
-  Token *tok = tokenize();
-  Node *node = expr(&tok, tok);
+    // Tokenize and parse.
+    current_input = argv[1];
+    Token *tok = tokenize();
+    Node *node = expr(&tok, tok);
 
-  if (tok->kind != TK_EOF) {
-      fmt::print("{}\n", (int)tok->kind);
-      error_tok(tok, "extra token");
-  }
+    if (tok->kind != TK_EOF) {
+        fmt::print("{}\n", (int) tok->kind);
+        error_tok(tok, "extra token");
+    }
 
-  fmt::print("  .global main\n");
-  fmt::print("main:\n");
+    fmt::print("  .global main\n");
+    fmt::print("main:\n");
 
-  // Traverse the AST to emit assembly.
-  gen_expr(node);
-  fmt::print("  ret\n");
+    // Traverse the AST to emit assembly.
+    gen_expr(node);
+    fmt::print("  ret\n");
 
-  assert(depth == 0);
-  return 0;
+    assert(depth == 0);
+    return 0;
 }
